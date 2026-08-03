@@ -1547,3 +1547,177 @@ async function sendCoach() {
   }
   document.getElementById('chat-send-btn').disabled=false;
 }
+
+function checkin(type) {
+  const prompts = {
+    morning:'Morning check-in. What did you have for breakfast? How is energy?',
+    lunch:'Lunch check-in. What are you eating today?',
+    danger:'4pm check-in. How are the cravings? What are you tempted by?',
+    evening:'Evening check-in. How was today overall?'
+  };
+  document.getElementById('coach-input').value = prompts[type];
+  document.getElementById(`ci-${type}`).classList.add('done');
+  switchTab('coach');
+  sendCoach();
+}
+
+function highlightToday() {
+  const d = new Date().getDay();
+  const map = {1:'mon',2:'tue',4:'thu'};
+  if (map[d]) {
+    document.getElementById(`wd-${map[d]}`).classList.add('today');
+    document.getElementById(`tag-${map[d]}`).style.display='block';
+  }
+}
+
+function loadPrevious() {
+  ['mon','tue','thu'].forEach(day=>{
+    const prev = getLastSession(day);
+    if (!prev) return;
+    SESSION_EX[day].forEach((ex,i)=>{
+      const el = document.getElementById(`p-${day}-${i}`);
+      if (!el) return;
+      const prevEx = prev.exercises[i];
+      if (prevEx?.sets?.length) el.textContent=`Last: ${prevEx.sets.map(s=>`${s.weight}kg×${s.reps}`).join(', ')} — beat this`;
+    });
+  });
+}
+
+function getLastSession(day) {
+  const keys = Object.keys(workoutSessions).filter(k=>k.startsWith(day+'-')).sort().reverse();
+  return keys.length ? workoutSessions[keys[0]] : null;
+}
+
+function buildSessionForm() {
+  const dayKey = getDayKey();
+  const form = document.getElementById('session-form');
+  if (!dayKey) { form.innerHTML='<div class="empty"><div class="empty-title">No session today</div><div class="empty-sub">Log Mon, Tue or Thu sessions here.</div></div>'; return; }
+  form.innerHTML = SESSION_EX[dayKey].map((ex,i)=>`
+    <div class="log-exercise">
+      <div class="log-exercise-name">${ex}</div>
+      ${[0,1,2].map(s=>`<div class="set-row"><span class="set-label">Set ${s+1}</span><input type="number" class="set-input" placeholder="kg" id="sw-${i}-${s}" step="0.5"><input type="number" class="set-input" placeholder="reps" id="sr-${i}-${s}"></div>`).join('')}
+    </div>`).join('');
+}
+
+function saveSession() {
+  const dayKey = getDayKey();
+  if (!dayKey) return;
+  const sessionData = { date:getToday(), exercises:SESSION_EX[dayKey].map((ex,i)=>({
+    name:ex,
+    sets:[0,1,2].map(s=>{
+      const w=document.getElementById(`sw-${i}-${s}`)?.value;
+      const r=document.getElementById(`sr-${i}-${s}`)?.value;
+      return w&&r?{weight:parseFloat(w),reps:parseInt(r)}:null;
+    }).filter(Boolean)
+  }))};
+  workoutSessions[`${dayKey}-${getToday()}`]=sessionData;
+  localStorage.setItem('mm-sessions',JSON.stringify(workoutSessions));
+  const summary = sessionData.exercises.map(e=>`${e.name}: ${e.sets.map(s=>`${s.weight}kg×${s.reps}`).join(', ')||'not logged'}`).join('\n');
+  document.getElementById('coach-input').value=`Session logged:\n${summary}\n\nHow did I do and what should I aim for next session?`;
+  switchTab('coach');
+  sendCoach();
+}
+
+function saveWeight() {
+  const val = parseFloat(document.getElementById('w-input').value);
+  if (isNaN(val)||val<40||val>250) { alert('Enter a valid weight'); return; }
+  weightLog = weightLog.filter(e=>e.date!==getToday());
+  weightLog.unshift({date:getToday(),weight:val});
+  weightLog = weightLog.slice(0,90);
+  localStorage.setItem('mm-weights',JSON.stringify(weightLog));
+  document.getElementById('w-input').value='';
+  updateProgress();
+  document.getElementById('coach-input').value=`Weight logged: ${val}kg this morning.`;
+  switchTab('coach');
+  sendCoach();
+}
+
+function updateProgress() {
+  if (!weightLog.length) return;
+  const current = weightLog[0].weight;
+  const start=96, target=82;
+  document.getElementById('w-num').textContent=current.toFixed(1);
+  const lost=(start-current).toFixed(1);
+  const toGo=(current-target).toFixed(1);
+  const pct=Math.max(0,Math.min(100,((start-current)/(start-target))*100));
+  document.getElementById('s-lost').textContent=lost>0?lost+'kg':'0';
+  document.getElementById('s-togo').textContent=toGo>0?toGo+'kg':'0';
+  document.getElementById('s-weeks').textContent=toGo>0?Math.ceil(parseFloat(toGo)/0.5):'✓';
+  document.getElementById('w-bar').style.width=pct+'%';
+  if (weightLog.length>1) {
+    const diff=current-weightLog[1].weight;
+    const el=document.getElementById('w-delta');
+    el.textContent=diff<0?`↓ ${Math.abs(diff).toFixed(1)}kg from last log`:diff>0?`↑ ${diff.toFixed(1)}kg from last log`:'Same as last log';
+    el.style.color=diff<0?'var(--green)':diff>0?'var(--red)':'var(--text-muted)';
+  }
+  const hist=document.getElementById('w-history');
+  hist.innerHTML=weightLog.slice(0,30).map((e,i)=>{
+    let diff='';
+    if (i<weightLog.length-1) {
+      const d=e.weight-weightLog[i+1].weight;
+      diff=`<span class="weight-log-diff" style="color:${d<0?'var(--green)':d>0?'var(--red)':'var(--text-muted)'}">${d>0?'+':''}${d.toFixed(1)}</span>`;
+    }
+    return `<div class="weight-log-row"><span class="weight-log-date">${new Date(e.date+'T12:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short'})}</span><span class="weight-log-val">${e.weight.toFixed(1)}kg</span>${diff}</div>`;
+  }).join('');
+}
+
+function handlePhoto(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const r = Math.min(1,800/img.height);
+      canvas.width=img.width*r; canvas.height=img.height*r;
+      canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);
+      photos.unshift({date:getToday(),src:canvas.toDataURL('image/jpeg',0.7),weight:weightLog.length?weightLog[0].weight:null});
+      photos=photos.slice(0,52);
+      localStorage.setItem('mm-photos',JSON.stringify(photos));
+      renderPhotos();
+      switchTab('photos');
+    };
+    img.src=e.target.result;
+  };
+  reader.readAsDataURL(file);
+  event.target.value='';
+}
+
+function renderPhotos() {
+  const grid = document.getElementById('photo-grid');
+  if (!photos.length) { grid.innerHTML=''; return; }
+  grid.innerHTML=photos.map((p,i)=>`
+    <div class="photo-card">
+      <img src="${p.src}" alt="Progress">
+      <div class="photo-meta">
+        <div class="photo-date">${new Date(p.date+'T12:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}</div>
+        ${p.weight?`<div class="photo-weight">${p.weight}kg</div>`:''}
+      </div>
+      <button class="photo-del" onclick="deletePhoto(${i})">×</button>
+    </div>`).join('');
+}
+
+function deletePhoto(i) {
+  if (!confirm('Delete this photo?')) return;
+  photos.splice(i,1);
+  localStorage.setItem('mm-photos',JSON.stringify(photos));
+  renderPhotos();
+}
+
+function checkTime() {
+  const h = new Date().getHours();
+  document.getElementById('danger-banner').style.display = (h>=15&&h<19)?'block':'none';
+}
+
+function switchTab(tab) {
+  const tabs=['food','coach','workout','meals','nearby','progress','photos'];
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',tabs[i]===tab));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById(`panel-${tab}`).classList.add('active');
+}
+
+window.onload = init;
+</script>
+</body>
+</html>
