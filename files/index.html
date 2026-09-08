@@ -310,6 +310,17 @@ summary{font-size:11px;color:var(--txtM);cursor:pointer;padding:8px 0 0;list-sty
     <button class="msave" onclick="saveAsMeal()">Save as favourite meal</button>
   </div>
 </div>
+<!-- SLOT PICKER MODAL -->
+<div class="modal-ov" id="slotPickerMov" onclick="maybeCloseSlotPicker(event)">
+  <div class="lib-modal">
+    <div class="mhandle"></div>
+    <div style="font-family:'Playfair Display',serif;font-size:16px;font-weight:700;color:var(--txt);margin-bottom:4px" id="spTitle">Slot</div>
+    <div id="spCurrent" style="margin-bottom:10px"></div>
+    <input type="text" class="lib-search" id="spSearch" placeholder="Search tasks or activities..." oninput="renderSlotPicker()">
+    <div id="spList" style="max-height:320px;overflow-y:auto"></div>
+    <div class="tk-add-row" style="margin-top:10px"><input type="text" id="spNewAct" placeholder="Add a new activity…" onkeydown="if(event.key==='Enter')spAddCustomActivity()"><button onclick="spAddCustomActivity()">+</button></div>
+  </div>
+</div>
 <!-- EXERCISE LIBRARY MODAL -->
 <div class="modal-ov" id="libMov" onclick="maybeCloseLib(event)">
   <div class="lib-modal">
@@ -456,9 +467,7 @@ summary{font-size:11px;color:var(--txtM);cursor:pointer;padding:8px 0 0;list-sty
         <button class="btn-outline" onclick="clearSchedDay()">Clear day</button>
       </div>
       <div class="day-strip" id="schedDayStrip"></div>
-      <p style="font-size:11px;color:var(--txtM);margin:2px 0 12px;line-height:1.5">Tap a task above, or an activity below, then tap or drag down the list to fill it in. A slot can hold up to 5 things, shown as a small checklist — handy for packing several short tasks into one block. With nothing selected, tapping a filled slot removes the last thing added; "Clear slot" wipes it completely.</p>
-      <div id="schedBrushes" style="margin-bottom:10px"></div>
-      <div class="tk-add-row" style="margin-bottom:14px"><input type="text" id="newActInp" placeholder="Add a new activity…" onkeydown="if(event.key==='Enter')addCustomAct()"><button onclick="addCustomAct()">+</button></div>
+      <p style="font-size:11px;color:var(--txtM);margin:2px 0 12px;line-height:1.5">Tap any slot to pick what goes in it — a task, a subtask, or an activity. A slot can hold up to 5 things.</p>
       <div id="schedSlots"></div>
     </div>
   </div>
@@ -641,8 +650,9 @@ function renderPhotos(){const g=document.getElementById('pgrid');if(!photos.leng
 async function delPhoto(i){if(!confirm('Delete?'))return;const p=photos[i];photos.splice(i,1);renderPhotos();if(p.id){const {error}=await sb.from('mm_photos').delete().eq('id',p.id);if(error)console.error(error);try{const fname=p.src.split('/').pop();await sb.storage.from('mm-photos').remove([fname])}catch(e){}}}
 function chkTime(){const h=new Date().getHours();document.getElementById('dbanner').style.display=(h>=15&&h<19)?'block':'none'}
 // SCHEDULE / TASKS
-let taskCats=[],mmTasks=[],subtasks=[],planner={},schedBrush=null,schedWeekStart=null,schedSelDay=null,schedShowEarly=false,schedDragging=false;
+let taskCats=[],mmTasks=[],subtasks=[],planner={},schedWeekStart=null,schedSelDay=null,schedShowEarly=false;
 let hiddenActivities=[],activityCounts={};
+let spDate=null,spSlot=null;
 const ACT_PAL=['#D4A843','#8BA888','#E8917A','#7FB3D5','#C39BD3','#76D7C4','#F1948A','#82E0AA','#F0B27A','#85C1E9'];
 function mondayOf(d){const dt=new Date(d+'T12:00:00');const day=dt.getDay();const diff=day===0?-6:1-day;dt.setDate(dt.getDate()+diff);return dt.toISOString().split('T')[0]}
 function addDaysStr(d,n){const dt=new Date(d+'T12:00:00');dt.setDate(dt.getDate()+n);return dt.toISOString().split('T')[0]}
@@ -652,7 +662,7 @@ function fmtMin(m){if(!m)return'';const h=Math.floor(m/60),r=m%60;return h&&r?h+
 function fmtRange(ws){const s=new Date(ws+'T12:00:00'),e=new Date(addDaysStr(ws,6)+'T12:00:00');const f=dt=>dt.toLocaleDateString('en-GB',{day:'numeric',month:'short'});return f(s)+' – '+f(e)}
 
 async function loadHiddenActivities(){const {data,error}=await sb.from('mm_hidden_activities').select('activity');if(error){console.error(error);return}hiddenActivities=(data||[]).map(r=>r.activity)}
-async function loadActivityFrequency(){const {data,error}=await sb.from('mm_planner_items').select('activity,task_id').is('task_id',null);if(error){console.error(error);return}const counts={};(data||[]).forEach(r=>{if(r.activity)counts[r.activity]=(counts[r.activity]||0)+1});activityCounts=counts}
+async function loadActivityFrequency(){const {data,error}=await sb.from('mm_planner_items').select('activity,task_id,subtask_id').is('task_id',null).is('subtask_id',null);if(error){console.error(error);return}const counts={};(data||[]).forEach(r=>{if(r.activity)counts[r.activity]=(counts[r.activity]||0)+1});activityCounts=counts}
 async function loadPlannerRange(){
   const rangeStart=addDaysStr(schedWeekStart,-1);
   const rangeEnd=addDaysStr(schedWeekStart,7);
@@ -662,7 +672,7 @@ async function loadPlannerRange(){
   (data||[]).forEach(r=>{
     if(!planner[r.block_date])planner[r.block_date]={};
     if(!planner[r.block_date][r.slot_index])planner[r.block_date][r.slot_index]=[];
-    planner[r.block_date][r.slot_index].push({id:r.id,activity:r.activity,taskId:r.task_id});
+    planner[r.block_date][r.slot_index].push({id:r.id,activity:r.activity,taskId:r.task_id,subtaskId:r.subtask_id});
   });
 }
 async function loadSchedule(){
@@ -681,8 +691,6 @@ async function loadSchedule(){
   subtasks=(subsData||[]).map(s=>({id:s.id,taskId:s.task_id,title:s.title,done:s.is_complete}));
   await loadPlannerRange();
   renderTasks();renderSchedWeek();
-  window.addEventListener('mouseup',()=>schedDragging=false);
-  window.addEventListener('touchend',()=>schedDragging=false);
 }
 
 async function addTaskCat(){
@@ -700,7 +708,6 @@ async function delTaskCat(id){
   taskCats=taskCats.filter(c=>c.id!==id);
   mmTasks=mmTasks.filter(t=>t.categoryId!==id);
   subtasks=subtasks.filter(s=>!removedIds.includes(s.taskId));
-  if(schedBrush&&schedBrush.kind==='task'&&!mmTasks.find(t=>t.id===schedBrush.id))schedBrush=null;
   renderTasks();renderSchedWeek();
   const {error}=await sb.from('mm_task_categories').delete().eq('id',id);
   if(error)console.error(error);
@@ -723,13 +730,12 @@ async function toggleTask(id){
 async function delTask(id){
   mmTasks=mmTasks.filter(t=>t.id!==id);
   subtasks=subtasks.filter(s=>s.taskId!==id);
-  if(schedBrush&&schedBrush.kind==='task'&&schedBrush.id===id)schedBrush=null;
   renderTasks();renderSchedWeek();
   const {error}=await sb.from('mm_tasks').delete().eq('id',id);
   if(error)console.error(error);
 }
-function selectTaskBrush(id){const t=mmTasks.find(x=>x.id===id);if(!t)return;schedBrush=(schedBrush&&schedBrush.kind==='task'&&schedBrush.id===id)?null:{kind:'task',id:t.id,title:t.title};renderTasks();renderSchedWeek()}
 function taskMinutesThisWeek(taskId){let mins=0;for(let i=0;i<7;i++){const d=addDaysStr(schedWeekStart,i);const dayBlocks=planner[d]||{};Object.values(dayBlocks).forEach(arr=>{(arr||[]).forEach(e=>{if(e.taskId===taskId)mins+=30})})}return mins}
+function subtaskMinutesThisWeek(subtaskId){let mins=0;for(let i=0;i<7;i++){const d=addDaysStr(schedWeekStart,i);const dayBlocks=planner[d]||{};Object.values(dayBlocks).forEach(arr=>{(arr||[]).forEach(e=>{if(e.subtaskId===subtaskId)mins+=30})})}return mins}
 function priLabel(p){return p==='low'?'Low':p==='med'?'Med':p==='high'?'High':'+ priority'}
 async function cyclePriority(taskId){
   const t=mmTasks.find(x=>x.id===taskId);if(!t)return;
@@ -756,7 +762,7 @@ async function addSubtask(taskId){
 }
 async function toggleSubtask(id){
   const s=subtasks.find(x=>x.id===id);if(!s)return;
-  s.done=!s.done;renderTasks();
+  s.done=!s.done;renderTasks();renderSchedSlots();
   const {error}=await sb.from('mm_subtasks').update({is_complete:s.done}).eq('id',id);
   if(error)console.error(error);
 }
@@ -773,14 +779,14 @@ function renderTasks(){
     return `<div class="tk-cat">
       <div class="tk-cat-hdr"><span class="tk-cat-name">${c.title}</span><button class="btn-x" onclick="delTaskCat('${c.id}')">×</button></div>
       ${catTasks.map(t=>{
-        const mins=taskMinutesThisWeek(t.id);const sel=schedBrush&&schedBrush.kind==='task'&&schedBrush.id===t.id;
+        const mins=taskMinutesThisWeek(t.id);
         const subs=subtasks.filter(s=>s.taskId===t.id);
         const pri=t.importance||'';
         const overdue=t.deadline&&!t.done&&t.deadline<today();
-        return `<div class="tk-task-wrap${sel?' sel':''}">
+        return `<div class="tk-task-wrap">
           <div class="tk-task${t.done?' done':''}">
             <input type="checkbox" ${t.done?'checked':''} onchange="toggleTask('${t.id}')">
-            <span class="tk-task-title" onclick="selectTaskBrush('${t.id}')">${t.title}</span>
+            <span class="tk-task-title">${t.title}</span>
             ${mins?`<span class="tk-badge">${fmtMin(mins)}</span>`:''}
             <button class="btn-x" onclick="delTask('${t.id}')">×</button>
           </div>
@@ -789,7 +795,7 @@ function renderTasks(){
             <input type="date" class="tk-due${overdue?' overdue':''}" value="${t.deadline||''}" onchange="setDeadline('${t.id}',this.value)">
           </div>
           <div class="tk-subtasks">
-            ${subs.map(s=>`<div class="tk-subtask${s.done?' done':''}"><input type="checkbox" ${s.done?'checked':''} onchange="toggleSubtask('${s.id}')"><span class="tk-subtask-title">${s.title}</span><button class="btn-x" onclick="delSubtask('${s.id}')">×</button></div>`).join('')}
+            ${subs.map(s=>{const smins=subtaskMinutesThisWeek(s.id);return `<div class="tk-subtask${s.done?' done':''}"><input type="checkbox" ${s.done?'checked':''} onchange="toggleSubtask('${s.id}')"><span class="tk-subtask-title">${s.title}</span>${smins?`<span class="tk-badge">${fmtMin(smins)}</span>`:''}<button class="btn-x" onclick="delSubtask('${s.id}')">×</button></div>`}).join('')}
             <div class="tk-add-row small"><input type="text" id="newSubInp-${t.id}" placeholder="Add subtask…" onkeydown="if(event.key==='Enter')addSubtask('${t.id}')"><button onclick="addSubtask('${t.id}')">+</button></div>
           </div>
         </div>`;
@@ -798,75 +804,19 @@ function renderTasks(){
     </div>`;
   }).join('');
 }
-function schedTopActivities(){
-  const counts={...activityCounts};
-  const defaults=['Gym','Padel','Football','Work','Church','Sleep','Commute'];
-  defaults.forEach(a=>{if(!(a in counts))counts[a]=0});
-  return Object.entries(counts).filter(([name])=>!hiddenActivities.includes(name)).sort((a,b)=>b[1]-a[1]).slice(0,10).map(x=>x[0]);
-}
-async function hideActivity(name){
-  if(!hiddenActivities.includes(name))hiddenActivities.push(name);
-  if(schedBrush&&schedBrush.kind==='activity'&&schedBrush.name===name)schedBrush=null;
-  renderSchedWeek();
-  const {error}=await sb.from('mm_hidden_activities').upsert({activity:name});
-  if(error)console.error(error);
-}
 function renderSchedWeek(){
   document.getElementById('schedWkLbl').textContent=fmtRange(schedWeekStart);
   const strip=document.getElementById('schedDayStrip');
   const days=[];for(let i=0;i<7;i++)days.push(addDaysStr(schedWeekStart,i));
   const dn=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   strip.innerHTML=days.map((d,i)=>{const dt=new Date(d+'T12:00:00');return `<div class="dpill${d===schedSelDay?' active':''}${d===today()?' today':''}" onclick="selSchedDay('${d}')"><div class="dname">${dn[i]}</div><div class="dnum">${dt.getDate()}</div></div>`}).join('');
-  const brushes=document.getElementById('schedBrushes');
-  const acts=schedTopActivities();
-  brushes.innerHTML=acts.filter(Boolean).map(a=>{const active=schedBrush&&schedBrush.kind==='activity'&&schedBrush.name===a;const safe=a.replace(/'/g,"\\'");return `<span class="tk-chip${active?' active':''}" style="--chip:${actColor(a)}"><span style="cursor:pointer" onclick="selActBrush('${safe}')">${a}</span><span class="tk-chip-x" onclick="hideActivity('${safe}')" title="Hide this activity">×</span></span>`;}).join('')+`<span class="tk-chip eraser${schedBrush&&schedBrush.kind==='erase'?' active':''}" style="cursor:pointer" onclick="selEraseBrush()">✕ Clear slot</span>`;
   renderSchedSlots();
 }
 function selSchedDay(d){schedSelDay=d;renderSchedWeek()}
 async function schedPrevWeek(){schedWeekStart=addDaysStr(schedWeekStart,-7);await loadPlannerRange();renderSchedWeek()}
 async function schedNextWeek(){schedWeekStart=addDaysStr(schedWeekStart,7);await loadPlannerRange();renderSchedWeek()}
 async function schedThisWeek(){schedWeekStart=mondayOf(today());schedSelDay=today();await loadPlannerRange();renderSchedWeek()}
-function selActBrush(name){schedBrush=(schedBrush&&schedBrush.kind==='activity'&&schedBrush.name===name)?null:{kind:'activity',name};renderSchedWeek()}
-function selEraseBrush(){schedBrush=(schedBrush&&schedBrush.kind==='erase')?null:{kind:'erase'};renderSchedWeek()}
-function addCustomAct(){const inp=document.getElementById('newActInp');const v=inp.value.trim();if(!v)return;schedBrush={kind:'activity',name:v};inp.value='';renderSchedWeek()}
 function toggleShowEarly(){schedShowEarly=!schedShowEarly;renderSchedSlots()}
-async function paintSlot(idx){
-  if(!planner[schedSelDay])planner[schedSelDay]={};
-  const cur=planner[schedSelDay][idx]||[];
-  if(schedBrush){
-    if(schedBrush.kind==='erase'){
-      const ids=cur.map(e=>e.id).filter(Boolean);
-      delete planner[schedSelDay][idx];
-      renderSchedSlots();renderTasks();
-      if(ids.length){const {error}=await sb.from('mm_planner_items').delete().in('id',ids);if(error)console.error(error)}
-    } else {
-      const entry=schedBrush.kind==='activity'?{activity:schedBrush.name,taskId:null}:{activity:schedBrush.title,taskId:schedBrush.id};
-      const key=entry.taskId||entry.activity;
-      const exists=cur.some(e=>(e.taskId||e.activity)===key);
-      if(!exists&&cur.length<5){
-        if(!entry.taskId)activityCounts[entry.activity]=(activityCounts[entry.activity]||0)+1;
-        const tempId='tmp-'+Date.now()+Math.random();
-        planner[schedSelDay][idx]=[...cur,{...entry,id:tempId}];
-        renderSchedSlots();renderTasks();
-        const {data,error}=await sb.from('mm_planner_items').insert({block_date:schedSelDay,slot_index:idx,activity:entry.activity,task_id:entry.taskId}).select().single();
-        if(error){console.error(error);return}
-        const arr=planner[schedSelDay]&&planner[schedSelDay][idx];
-        if(arr){const tItem=arr.find(e=>e.id===tempId);if(tItem)tItem.id=data.id}
-      }
-    }
-  } else if(cur.length){
-    const removed=cur[cur.length-1];
-    const next=cur.slice(0,-1);
-    if(next.length)planner[schedSelDay][idx]=next;else delete planner[schedSelDay][idx];
-    renderSchedSlots();renderTasks();
-    if(removed.id&&!String(removed.id).startsWith('tmp-')){
-      const {error}=await sb.from('mm_planner_items').delete().eq('id',removed.id);
-      if(error)console.error(error);
-    }
-  }
-}
-function startPaint(idx){schedDragging=true;paintSlot(idx)}
-function dragPaint(idx){if(schedDragging)paintSlot(idx)}
 function renderSchedSlots(){
   const el=document.getElementById('schedSlots');
   const start=schedShowEarly?0:12;
@@ -877,16 +827,104 @@ function renderSchedSlots(){
     let body;
     if(entries.length){
       body=`<div class="tk-slot-list">`+entries.map(e=>{
-        const isDone=e.taskId&&mmTasks.some(t=>t.id===e.taskId&&t.done);
+        const isDone=(e.taskId&&mmTasks.some(t=>t.id===e.taskId&&t.done))||(e.subtaskId&&subtasks.some(s=>s.id===e.subtaskId&&s.done));
         return `<div class="tk-slot-item${isDone?' seg-done':''}"><span class="tk-slot-dot" style="background:${actColor(e.activity)}"></span>${e.activity}</div>`;
       }).join('')+`</div>`;
     } else {
       body='<div class="tk-slot-body empty"></div>';
     }
-    html+=`<div class="tk-slot${idx%2===0?' tk-hour-start':''}"><div class="tk-slot-time">${idx%2===0?slotTime(idx):''}</div><div class="tk-slot-cell" onmousedown="startPaint(${idx})" ontouchstart="startPaint(${idx})" onmouseenter="dragPaint(${idx})">${body}</div></div>`;
+    html+=`<div class="tk-slot${idx%2===0?' tk-hour-start':''}"><div class="tk-slot-time">${idx%2===0?slotTime(idx):''}</div><div class="tk-slot-cell" onclick="openSlotPicker('${schedSelDay}',${idx})">${body}</div></div>`;
   }
   el.innerHTML=html;
 }
+
+// ─── Slot picker ────────────────────────────────────────
+function openSlotPicker(date,idx){
+  spDate=date;spSlot=idx;
+  const dt=new Date(date+'T12:00:00');
+  document.getElementById('spTitle').textContent=`${dt.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})} · ${slotTime(idx)}`;
+  document.getElementById('spSearch').value='';
+  renderSlotPicker();
+  document.getElementById('slotPickerMov').classList.add('open');
+}
+function closeSlotPicker(){document.getElementById('slotPickerMov').classList.remove('open')}
+function maybeCloseSlotPicker(e){if(e.target===document.getElementById('slotPickerMov'))closeSlotPicker()}
+function renderSlotPicker(){
+  const cur=(planner[spDate]&&planner[spDate][spSlot])||[];
+  const curEl=document.getElementById('spCurrent');
+  curEl.innerHTML=cur.length
+    ? '<div class="flbl" style="margin-bottom:6px">In this slot</div>'+cur.map((e,i)=>`<div class="tk-subtask"><span class="tk-slot-dot" style="background:${actColor(e.activity)}"></span><span class="tk-subtask-title">${e.activity}</span><button class="btn-x" onclick="spRemoveEntry(${i})">×</button></div>`).join('')
+    : '<div style="font-size:12px;color:var(--txtM);margin-bottom:6px">Nothing in this slot yet</div>';
+
+  const q=document.getElementById('spSearch').value.toLowerCase();
+  const el=document.getElementById('spList');
+  let html='';
+
+  const taskMatches=mmTasks.filter(t=>!q||t.title.toLowerCase().includes(q));
+  if(taskMatches.length){
+    html+='<div class="flbl" style="margin:10px 0 4px">Tasks</div>';
+    taskMatches.forEach(t=>{
+      html+=`<div class="ex-lib-item"><div style="flex:1;cursor:pointer" onclick="spAddTask('${t.id}')"><div class="ex-lib-name">${t.title}</div></div><button class="ex-add-btn" onclick="spAddTask('${t.id}')">Add</button></div>`;
+      subtasks.filter(s=>s.taskId===t.id&&(!q||s.title.toLowerCase().includes(q))).forEach(s=>{
+        html+=`<div class="ex-lib-item" style="padding-left:16px"><div style="flex:1;cursor:pointer" onclick="spAddSubtask('${s.id}')"><div class="ex-lib-name" style="font-size:12px;color:var(--txt2)">↳ ${s.title}</div></div><button class="ex-add-btn" onclick="spAddSubtask('${s.id}')">Add</button></div>`;
+      });
+    });
+  }
+
+  const defaults=['Gym','Padel','Football','Work','Church','Sleep','Commute'];
+  const allActs=[...new Set([...Object.keys(activityCounts),...defaults])];
+  const visibleActs=allActs.filter(a=>q?true:!hiddenActivities.includes(a));
+  const actMatches=visibleActs.filter(a=>!q||a.toLowerCase().includes(q)).sort((a,b)=>(activityCounts[b]||0)-(activityCounts[a]||0));
+  if(actMatches.length){
+    html+='<div class="flbl" style="margin:10px 0 4px">Activities</div>';
+    actMatches.forEach(a=>{
+      const safe=a.replace(/'/g,"\\'");
+      html+=`<div class="ex-lib-item"><div style="flex:1;cursor:pointer" onclick="spAddActivity('${safe}')"><div class="ex-lib-name">${a}</div></div><button class="ex-add-btn" onclick="spAddActivity('${safe}')">Add</button></div>`;
+    });
+  }
+
+  if(!taskMatches.length&&!actMatches.length){
+    html+='<div class="loading">No matches. Add a new activity below.</div>';
+  }
+  el.innerHTML=html;
+}
+async function spAddEntry(entry){
+  if(!planner[spDate])planner[spDate]={};
+  const cur=planner[spDate][spSlot]||[];
+  const key=entry.taskId||entry.subtaskId||entry.activity;
+  const exists=cur.some(e=>(e.taskId||e.subtaskId||e.activity)===key);
+  if(exists){renderSlotPicker();return}
+  if(cur.length>=5){alert('This slot already has 5 things in it.');return}
+  if(!entry.taskId&&!entry.subtaskId)activityCounts[entry.activity]=(activityCounts[entry.activity]||0)+1;
+  const tempId='tmp-'+Date.now()+Math.random();
+  planner[spDate][spSlot]=[...cur,{...entry,id:tempId}];
+  renderSlotPicker();renderSchedSlots();renderTasks();
+  const {data,error}=await sb.from('mm_planner_items').insert({block_date:spDate,slot_index:spSlot,activity:entry.activity,task_id:entry.taskId||null,subtask_id:entry.subtaskId||null}).select().single();
+  if(error){console.error(error);return}
+  const arr=planner[spDate]&&planner[spDate][spSlot];
+  if(arr){const t=arr.find(e=>e.id===tempId);if(t)t.id=data.id}
+}
+function spAddTask(taskId){const t=mmTasks.find(x=>x.id===taskId);if(!t)return;spAddEntry({activity:t.title,taskId:t.id,subtaskId:null})}
+function spAddSubtask(subId){const s=subtasks.find(x=>x.id===subId);if(!s)return;spAddEntry({activity:s.title,taskId:null,subtaskId:s.id})}
+function spAddActivity(name){spAddEntry({activity:name,taskId:null,subtaskId:null})}
+async function spAddCustomActivity(){
+  const inp=document.getElementById('spNewAct');const v=inp.value.trim();if(!v)return;
+  inp.value='';
+  await spAddEntry({activity:v,taskId:null,subtaskId:null});
+  renderSlotPicker();
+}
+async function spRemoveEntry(i){
+  const cur=planner[spDate][spSlot];
+  const removed=cur[i];
+  cur.splice(i,1);
+  if(!cur.length)delete planner[spDate][spSlot];
+  renderSlotPicker();renderSchedSlots();renderTasks();
+  if(removed.id&&!String(removed.id).startsWith('tmp-')){
+    const {error}=await sb.from('mm_planner_items').delete().eq('id',removed.id);
+    if(error)console.error(error);
+  }
+}
+
 async function copyPrevDay(){
   const prev=addDaysStr(schedSelDay,-1);
   const src=planner[prev];
@@ -894,8 +932,8 @@ async function copyPrevDay(){
   const rows=[];
   const optimistic={};
   Object.entries(src).forEach(([idx,entries])=>{
-    optimistic[idx]=entries.map(e=>({activity:e.activity,taskId:e.taskId,id:'tmp-'+Date.now()+Math.random()}));
-    entries.forEach(e=>rows.push({block_date:schedSelDay,slot_index:Number(idx),activity:e.activity,task_id:e.taskId}));
+    optimistic[idx]=entries.map(e=>({activity:e.activity,taskId:e.taskId,subtaskId:e.subtaskId,id:'tmp-'+Date.now()+Math.random()}));
+    entries.forEach(e=>rows.push({block_date:schedSelDay,slot_index:Number(idx),activity:e.activity,task_id:e.taskId,subtask_id:e.subtaskId}));
   });
   planner[schedSelDay]=optimistic;
   renderSchedSlots();renderTasks();
